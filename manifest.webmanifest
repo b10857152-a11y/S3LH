@@ -1,0 +1,13 @@
+{
+  "name": "構件數位盤點與儲位管理系統",
+  "short_name": "構件盤點",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f6f9",
+  "theme_color": "#102a43",
+  "description": "現場構件盤點、儲位與數量差異管理",
+  "icons": [
+    {"src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}
+  ]
+}

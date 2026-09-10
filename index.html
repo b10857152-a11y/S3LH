@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#102a43">
+  <meta name="description" content="構件數位盤點與儲位管理系統">
+  <title>構件盤點</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="主要導覽">
+      <div class="brand">
+        <span class="brand-mark">庫</span>
+        <div><strong>構件盤點</strong><small>儲位管理系統</small></div>
+      </div>
+      <nav>
+        <button class="nav-item active" data-view="count"><span>▣</span>現場盤點</button>
+        <button class="nav-item" data-view="dashboard"><span>◫</span>盤點總覽</button>
+        <button class="nav-item" data-view="search"><span>⌕</span>資料查詢</button>
+        <button class="nav-item" data-view="import"><span>⇧</span>Excel 匯入</button>
+      </nav>
+      <div class="user-card"><span class="avatar">盤</span><div><strong>現場盤點員</strong><small>示範模式</small></div></div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div><p class="eyebrow">盤點批次</p><h1 id="page-title">現場盤點</h1></div>
+        <div class="sync-pill"><span></span><span id="sync-text">本機資料已就緒</span></div>
+      </header>
+
+      <section id="view-count" class="view active">
+        <div class="location-lock">
+          <div><p>目前儲位</p><strong id="current-location">尚未選擇</strong></div>
+          <button id="change-location" class="secondary-btn">選擇儲位</button>
+        </div>
+
+        <div class="workspace-grid">
+          <section class="scan-panel card">
+            <div class="section-heading"><div><p class="step">步驟 1</p><h2>找到構件</h2></div><span class="shortcut">可使用掃描槍</span></div>
+            <label class="search-box">
+              <span>⌕</span>
+              <input id="part-search" autocomplete="off" placeholder="輸入物品編號、訂單或品名">
+              <button id="camera-button" type="button" aria-label="開啟相機掃描">掃描</button>
+            </label>
+            <div id="search-results" class="search-results" aria-live="polite"></div>
+          </section>
+
+          <section class="count-panel card" id="count-panel">
+            <div class="empty-state" id="empty-part">
+              <div class="empty-icon">⌗</div>
+              <h2>等待掃描構件</h2>
+              <p>先選擇儲位，再掃描或搜尋物品編號。</p>
+            </div>
+            <div id="part-form" hidden>
+              <div class="part-head"><div><p id="part-name">—</p><h2 id="part-no">—</h2></div><span id="part-status" class="status neutral">未清點</span></div>
+              <div class="facts">
+                <div><span>訂單編號</span><strong id="order-no">—</strong></div>
+                <div><span>帳面數量</span><strong id="book-qty">0</strong></div>
+                <div><span>其他儲位已盤</span><strong id="other-qty">0</strong></div>
+              </div>
+              <label class="field-label" for="actual-qty">本儲位實際數量</label>
+              <div class="qty-control"><button id="qty-minus" type="button">−</button><input id="actual-qty" inputmode="numeric" pattern="[0-9]*" placeholder="0"><button id="qty-plus" type="button">＋</button></div>
+              <button id="use-remaining" class="link-btn" type="button">帶入帳面剩餘量</button>
+              <div id="variance-banner" class="variance neutral">輸入數量後顯示差異</div>
+              <label class="verify-check"><input id="verified" type="checkbox"><span><strong>建立今日圖面確認基準</strong><small id="verify-date"></small></span></label>
+              <label class="field-label" for="note">備註（異常時填寫）</label>
+              <textarea id="note" rows="2" placeholder="例如：標籤不清、構件損壞"></textarea>
+              <button id="save-count" class="primary-btn" type="button">完成並掃下一筆</button>
+            </div>
+          </section>
+        </div>
+        <section class="recent card"><div class="section-heading"><div><p class="step">最近操作</p><h2>本儲位盤點</h2></div><button id="complete-location" class="secondary-btn">完成此儲位</button></div><div id="recent-list" class="recent-list"></div></section>
+      </section>
+
+      <section id="view-dashboard" class="view"><div id="kpi-grid" class="kpi-grid"></div><section class="card table-card"><div class="section-heading"><div><p class="step">訂單進度</p><h2>盤點明細</h2></div><button id="export-results" class="secondary-btn">匯出盤點結果</button></div><div class="table-wrap"><table><thead><tr><th>訂單</th><th>物品編號</th><th>帳面</th><th>實際</th><th>差異</th><th>狀態</th></tr></thead><tbody id="dashboard-table"></tbody></table></div></section></section>
+
+      <section id="view-search" class="view"><section class="card"><div class="section-heading"><div><p class="step">快速查詢</p><h2>所有構件</h2></div></div><label class="search-box wide"><span>⌕</span><input id="global-search" placeholder="搜尋訂單、物品編號、品名或儲位"></label><div class="table-wrap"><table><thead><tr><th>訂單</th><th>物品編號</th><th>品名</th><th>帳面</th><th>實際</th><th>儲位</th></tr></thead><tbody id="search-table"></tbody></table></div></section></section>
+
+      <section id="view-import" class="view"><section class="card import-card"><p class="step">建立帳面資料</p><h2>匯入 Excel</h2><p>支援庫存台多工作表格式與 ERP W122 格式。資料會先預覽，不會直接覆蓋。</p><label class="drop-zone"><input id="excel-file" type="file" accept=".xlsx,.xls"><span class="upload-icon">⇧</span><strong>選擇 Excel 檔案</strong><small>或將檔案拖曳到這裡</small></label><div id="import-preview"></div><button id="commit-import" class="primary-btn" type="button" hidden>確認匯入帳面資料</button></section></section>
+    </main>
+  </div>
+
+  <div id="location-dialog" class="dialog-backdrop" hidden><div class="dialog"><div class="dialog-head"><h2>選擇目前儲位</h2><button id="close-location" aria-label="關閉">×</button></div><div id="location-list" class="location-list"></div></div></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
