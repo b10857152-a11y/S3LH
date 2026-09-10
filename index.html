@@ -7,7 +7,7 @@
   <meta name="description" content="構件數位盤點與儲位管理系統">
   <title>構件盤點</title>
   <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="stylesheet" href="./styles.css?v=4">
+  <link rel="stylesheet" href="./styles.css?v=5">
 </head>
 <body>
   <div class="app-shell">
@@ -78,7 +78,7 @@
 
       <section id="view-dashboard" class="view"><div id="kpi-grid" class="kpi-grid"></div><section class="card table-card"><div class="section-heading"><div><p class="step">訂單進度</p><h2>盤點明細</h2></div><button id="export-results" class="secondary-btn">匯出盤點結果</button></div><div class="table-wrap"><table><thead><tr><th>訂單</th><th>物品編號</th><th>帳面</th><th>實際</th><th>差異</th><th>狀態</th></tr></thead><tbody id="dashboard-table"></tbody></table></div></section></section>
 
-      <section id="view-search" class="view"><section class="card"><div class="section-heading"><div><p class="step">快速查詢</p><h2>所有構件</h2></div></div><label class="search-box wide"><span>⌕</span><input id="global-search" placeholder="搜尋訂單、物品編號、品名或儲位"></label><div class="table-wrap"><table><thead><tr><th>訂單</th><th>物品編號</th><th>品名</th><th>帳面</th><th>實際</th><th>儲位</th></tr></thead><tbody id="search-table"></tbody></table></div></section></section>
+      <section id="view-search" class="view"><section class="card table-card"><div class="section-heading"><div><p class="step">快速查詢</p><h2>所有構件</h2></div></div><label class="search-box wide"><span>⌕</span><input id="global-search" placeholder="搜尋訂單、物品編號、品名或儲位"></label><div class="table-wrap"><table><thead><tr><th>訂單</th><th>物品編號</th><th>品名</th><th>帳面</th><th>實際</th><th>儲位</th></tr></thead><tbody id="search-table"></tbody></table></div></section><section class="card table-card batch-lookup"><div class="section-heading"><div><p class="step">Excel 清單比對</p><h2>批量查詢儲位</h2></div><button id="export-lookup" class="secondary-btn" type="button" hidden>匯出查詢結果</button></div><p class="helper-copy">Excel 至少要有「物品編號」或「構件編號」欄；若同時有採購單編號，會一起精確比對。</p><label class="lookup-upload"><input id="lookup-file" type="file" accept=".xlsx,.xls"><span>⇧</span><strong>選擇要查詢的 Excel</strong></label><div id="lookup-summary"></div><div class="table-wrap"><table class="lookup-table"><thead><tr><th>工作表／列</th><th>輸入訂單</th><th>構件編號</th><th>比對訂單</th><th>零件名稱</th><th>實際儲位與數量</th><th>結果</th></tr></thead><tbody id="lookup-table"></tbody></table></div></section></section>
 
       <section id="view-manage" class="view"><section class="card table-card"><div class="section-heading manage-heading"><div><p class="step">帳面資料維護</p><h2>全部構件</h2></div><button id="add-part" class="primary-btn compact" type="button">＋ 新增構件</button></div><div class="manage-tools"><label class="search-box wide"><span>⌕</span><input id="manage-search" placeholder="搜尋訂單、物品編號或品名"></label><select id="manage-filter" class="select-input" aria-label="構件狀態"><option value="active">使用中</option><option value="inactive">已停用</option><option value="all">全部</option></select></div><div class="table-wrap"><table class="manage-table"><thead><tr><th>訂單</th><th>物品編號／品名</th><th>帳面</th><th>實際</th><th>儲位</th><th>狀態</th><th>操作</th></tr></thead><tbody id="manage-table"></tbody></table></div></section></section>
 
@@ -93,8 +93,8 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="./config.js?v=4"></script>
-  <script src="./cloud.js?v=4"></script>
-  <script src="./app.js?v=4"></script>
+  <script src="./config.js?v=5"></script>
+  <script src="./cloud.js?v=5"></script>
+  <script src="./app.js?v=5"></script>
 </body>
 </html>
