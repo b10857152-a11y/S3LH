@@ -32,22 +32,24 @@
   async function loadState(){
     const c=getClient();if(!c)throw new Error('雲端設定尚未完成');
     const [locRes,opRes]=await Promise.all([
-      c.from('locations').select('id,code,name').eq('is_active',true).order('code'),
-      c.from('order_parts').select('id,book_qty,ordered_qty,orders!inner(order_no),parts!inner(id,part_no,name,drawing_no)')
+      c.from('locations').select('*').eq('is_active',true).order('code'),
+      c.from('order_parts').select('*,orders!inner(order_no),parts!inner(id,part_no,name,drawing_no)')
     ]);
     if(locRes.error)throw locRes.error;if(opRes.error)throw opRes.error;
-    const current=await ensureActiveSession(opRes.data||[]);
-    const locations=(locRes.data||[]).map(l=>({id:l.code,dbId:l.id,name:l.name}));
-    if(!current)return {locations,parts:[],counts:[]};
+    const activeOrderParts=(opRes.data||[]).filter(op=>op.is_active!==false);
+    const current=await ensureActiveSession(activeOrderParts);
+    const locations=(locRes.data||[]).map(l=>({id:l.code,dbId:l.id,name:l.name,rack:l.rack_code,level:l.level_code,bin:l.bin_code}));
+    const catalog=(opRes.data||[]).map(op=>({orderPartId:op.id,partDbId:op.parts?.id,order:op.orders?.order_no||'待確認',no:op.parts?.part_no||'未知',name:op.parts?.name||'未知構件',drawingNo:op.parts?.drawing_no||'',book:op.book_qty,isActive:op.is_active!==false}));
+    if(!current)return {locations,parts:[],counts:[],catalog};
     const targetRes=await c.from('inventory_targets').select('id,order_part_id,book_qty_snapshot,workflow_status').eq('session_id',current.id);
     if(targetRes.error)throw targetRes.error;
     const byOrderPart=new Map((opRes.data||[]).map(op=>[op.id,op]));
-    const parts=(targetRes.data||[]).map(t=>{const op=byOrderPart.get(t.order_part_id);return {id:t.id,targetId:t.id,orderPartId:t.order_part_id,partDbId:op?.parts?.id,order:op?.orders?.order_no||'待確認',no:op?.parts?.part_no||'未知',name:op?.parts?.name||'未知構件',drawingNo:op?.parts?.drawing_no||'',book:t.book_qty_snapshot,workflow:t.workflow_status};});
+    const parts=(targetRes.data||[]).map(t=>{const op=byOrderPart.get(t.order_part_id);return {id:t.id,targetId:t.id,orderPartId:t.order_part_id,partDbId:op?.parts?.id,order:op?.orders?.order_no||'待確認',no:op?.parts?.part_no||'未知',name:op?.parts?.name||'未知構件',drawingNo:op?.parts?.drawing_no||'',book:t.book_qty_snapshot,workflow:t.workflow_status,isActive:op?.is_active!==false};});
     const targetIds=parts.map(p=>p.targetId);
     let countRows=[];
     if(targetIds.length){const result=await c.from('count_entries').select('id,target_id,location_id,actual_qty,version_check_status,verified_at,note,recorded_at,is_void').in('target_id',targetIds).eq('is_void',false);if(result.error)throw result.error;countRows=result.data||[];}
     const locationByDb=new Map((locRes.data||[]).map(l=>[l.id,l.code]));
-    return {locations,parts,counts:countRows.map(r=>({id:r.id,partId:r.target_id,location:locationByDb.get(r.location_id)||'未知',locationDbId:r.location_id,qty:r.actual_qty,verified:r.version_check_status!=='UNCHECKED',note:r.note||'',at:r.recorded_at}))};
+    return {locations,parts,catalog,counts:countRows.map(r=>({id:r.id,partId:r.target_id,location:locationByDb.get(r.location_id)||'未知',locationDbId:r.location_id,qty:r.actual_qty,verified:r.version_check_status!=='UNCHECKED',note:r.note||'',at:r.recorded_at}))};
   }
   async function saveCount({part,location,qty,verified,note}){
     const c=getClient();
@@ -76,11 +78,37 @@
     ]);
     if(or.error)throw or.error;if(pr.error)throw pr.error;
     const orderIds=new Map(or.data.map(x=>[x.order_no,x.id])),partIds=new Map(pr.data.map(x=>[x.part_no,x.id]));
-    const rows=items.map(i=>({order_id:orderIds.get(i.order),part_id:partIds.get(i.no),ordered_qty:i.orderedValues?.length?Math.max(...i.orderedValues):null,book_qty:i.book}));
+    const rows=items.map(i=>({order_id:orderIds.get(i.order),part_id:partIds.get(i.no),ordered_qty:i.orderedValues?.length?Math.max(...i.orderedValues):null,book_qty:i.book,is_active:true}));
     const saved=await c.from('order_parts').upsert(rows,{onConflict:'order_id,part_id'}).select('id,book_qty');
     if(saved.error)throw saved.error;
     await ensureActiveSession(saved.data||[]);
     return saved.data.length;
   }
-  window.cloud={configured:Boolean(cfg.supabaseUrl&&cfg.supabasePublishableKey),session,signIn,signOut,loadState,saveCount,importItems};
+  async function addOrderPart(item){
+    const c=getClient();
+    const order=await c.from('orders').upsert({order_no:item.order},{onConflict:'order_no'}).select('id').single();if(order.error)throw order.error;
+    const part=await c.from('parts').upsert({part_no:item.no,name:item.name,drawing_no:item.drawingNo||null},{onConflict:'part_no'}).select('id').single();if(part.error)throw part.error;
+    const saved=await c.from('order_parts').upsert({order_id:order.data.id,part_id:part.data.id,book_qty:item.book,is_active:true},{onConflict:'order_id,part_id'}).select('id,book_qty').single();if(saved.error)throw saved.error;
+    await ensureActiveSession([saved.data]);
+    await c.from('audit_logs').insert({entity_type:'order_part',entity_id:saved.data.id,action:'CREATE',after_data:item,reason:item.reason||'手動新增'});
+    return saved.data;
+  }
+  async function updateOrderPart(id,item){
+    const c=getClient();
+    const before=await c.from('order_parts').select('id,part_id,book_qty,parts!inner(name,drawing_no)').eq('id',id).single();if(before.error)throw before.error;
+    const partUpdate=await c.from('parts').update({name:item.name,drawing_no:item.drawingNo||null}).eq('id',before.data.part_id);if(partUpdate.error)throw partUpdate.error;
+    const orderPartUpdate=await c.from('order_parts').update({book_qty:item.book}).eq('id',id).select('id,book_qty').single();if(orderPartUpdate.error)throw orderPartUpdate.error;
+    if(activeSessionId){const targetUpdate=await c.from('inventory_targets').update({book_qty_snapshot:item.book}).eq('session_id',activeSessionId).eq('order_part_id',id);if(targetUpdate.error)throw targetUpdate.error;}
+    await c.from('audit_logs').insert({entity_type:'order_part',entity_id:id,action:'UPDATE',before_data:before.data,after_data:item,reason:item.reason||'管理者修改'});
+    return orderPartUpdate.data;
+  }
+  async function setOrderPartActive(id,isActive,reason){
+    const c=getClient();
+    const before=await c.from('order_parts').select('id,is_active,book_qty').eq('id',id).single();if(before.error)throw before.error;
+    const updated=await c.from('order_parts').update({is_active:isActive}).eq('id',id).select('id,is_active,book_qty').single();if(updated.error)throw updated.error;
+    if(isActive)await ensureActiveSession([updated.data]);
+    await c.from('audit_logs').insert({entity_type:'order_part',entity_id:id,action:isActive?'RESTORE':'DISABLE',before_data:before.data,after_data:updated.data,reason});
+    return updated.data;
+  }
+  window.cloud={configured:Boolean(cfg.supabaseUrl&&cfg.supabasePublishableKey),session,signIn,signOut,loadState,saveCount,importItems,addOrderPart,updateOrderPart,setOrderPartActive};
 })();

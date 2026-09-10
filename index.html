@@ -7,7 +7,7 @@
   <meta name="description" content="構件數位盤點與儲位管理系統">
   <title>構件盤點</title>
   <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="stylesheet" href="./styles.css?v=3">
+  <link rel="stylesheet" href="./styles.css?v=4">
 </head>
 <body>
   <div class="app-shell">
@@ -20,9 +20,10 @@
         <button class="nav-item active" data-view="count"><span>▣</span>現場盤點</button>
         <button class="nav-item" data-view="dashboard"><span>◫</span>盤點總覽</button>
         <button class="nav-item" data-view="search"><span>⌕</span>資料查詢</button>
+        <button class="nav-item" data-view="manage"><span>☷</span>構件管理</button>
         <button class="nav-item" data-view="import"><span>⇧</span>Excel 匯入</button>
       </nav>
-      <div class="user-card"><span class="avatar">盤</span><div><strong>現場盤點員</strong><small>示範模式</small></div></div>
+      <div class="user-card"><span class="avatar">盤</span><div><strong>現場盤點員</strong><small id="user-mode">等待登入</small></div></div>
     </aside>
 
     <main>
@@ -79,17 +80,21 @@
 
       <section id="view-search" class="view"><section class="card"><div class="section-heading"><div><p class="step">快速查詢</p><h2>所有構件</h2></div></div><label class="search-box wide"><span>⌕</span><input id="global-search" placeholder="搜尋訂單、物品編號、品名或儲位"></label><div class="table-wrap"><table><thead><tr><th>訂單</th><th>物品編號</th><th>品名</th><th>帳面</th><th>實際</th><th>儲位</th></tr></thead><tbody id="search-table"></tbody></table></div></section></section>
 
+      <section id="view-manage" class="view"><section class="card table-card"><div class="section-heading manage-heading"><div><p class="step">帳面資料維護</p><h2>全部構件</h2></div><button id="add-part" class="primary-btn compact" type="button">＋ 新增構件</button></div><div class="manage-tools"><label class="search-box wide"><span>⌕</span><input id="manage-search" placeholder="搜尋訂單、物品編號或品名"></label><select id="manage-filter" class="select-input" aria-label="構件狀態"><option value="active">使用中</option><option value="inactive">已停用</option><option value="all">全部</option></select></div><div class="table-wrap"><table class="manage-table"><thead><tr><th>訂單</th><th>物品編號／品名</th><th>帳面</th><th>實際</th><th>儲位</th><th>狀態</th><th>操作</th></tr></thead><tbody id="manage-table"></tbody></table></div></section></section>
+
       <section id="view-import" class="view"><section class="card import-card"><p class="step">建立帳面資料</p><h2>匯入 Excel</h2><p>支援庫存台多工作表格式與 ERP W122 格式。資料會先預覽，不會直接覆蓋。</p><label class="drop-zone"><input id="excel-file" type="file" accept=".xlsx,.xls"><span class="upload-icon">⇧</span><strong>選擇 Excel 檔案</strong><small>或將檔案拖曳到這裡</small></label><div id="import-preview"></div><button id="commit-import" class="primary-btn" type="button" hidden>確認匯入帳面資料</button></section></section>
     </main>
   </div>
 
-  <div id="location-dialog" class="dialog-backdrop" hidden><div class="dialog"><div class="dialog-head"><h2>選擇目前儲位</h2><button id="close-location" aria-label="關閉">×</button></div><div id="location-list" class="location-list"></div></div></div>
+  <div id="location-dialog" class="dialog-backdrop" hidden><div class="dialog"><div class="dialog-head"><div><p class="step">架 → 層 → 格</p><h2 id="location-step-title">選擇架位</h2></div><button id="close-location" aria-label="關閉">×</button></div><div id="location-breadcrumb" class="location-breadcrumb">尚未選擇</div><div id="location-list" class="location-list"></div><div class="dialog-actions"><button id="back-location" class="secondary-btn" type="button" hidden>返回上一層</button><button id="confirm-location" class="primary-btn compact" type="button" hidden>確認此儲位</button></div></div></div>
+  <div id="part-dialog" class="dialog-backdrop" hidden><form id="part-form-manage" class="dialog"><div class="dialog-head"><div><p class="step">構件管理</p><h2 id="manage-dialog-title">新增訂單構件</h2></div><button id="close-part-dialog" type="button" aria-label="關閉">×</button></div><label class="field-label" for="manual-order">採購單編號</label><input id="manual-order" class="text-input" required><label class="field-label" for="manual-part-no">構件編號</label><input id="manual-part-no" class="text-input" required><label class="field-label" for="manual-part-name">零件名稱</label><input id="manual-part-name" class="text-input" required><label class="field-label" for="manual-drawing">圖號（選填）</label><input id="manual-drawing" class="text-input"><label class="field-label" for="manual-book">帳面數量</label><input id="manual-book" class="text-input" type="number" inputmode="numeric" min="0" step="1" required><label class="field-label" for="manual-reason">修改原因／備註</label><input id="manual-reason" class="text-input" placeholder="例如：現場發現漏列"><div id="part-manage-error" class="variance bad" hidden></div><button id="manage-part-submit" class="primary-btn" type="submit">新增並加入本次盤點</button></form></div>
+  <div id="disable-dialog" class="dialog-backdrop" hidden><form id="disable-form" class="dialog"><div class="dialog-head"><div><p class="step">保留歷史紀錄</p><h2>停用此訂單構件</h2></div><button id="close-disable-dialog" type="button" aria-label="關閉">×</button></div><p id="disable-part-label" class="dialog-copy"></p><label class="field-label" for="disable-reason">停用原因</label><input id="disable-reason" class="text-input" required placeholder="例如：帳面誤列、訂單取消"><div class="dialog-actions"><button id="cancel-disable" class="secondary-btn" type="button">取消</button><button class="danger-btn" type="submit">確認停用</button></div></form></div>
   <div id="auth-dialog" class="dialog-backdrop" hidden><form id="auth-form" class="dialog auth-dialog"><div class="dialog-head"><div><p class="step">雲端資料</p><h2>登入構件盤點</h2></div></div><p>登入後，電腦與手機會使用同一批盤點資料。</p><label class="field-label" for="auth-email">Email</label><input id="auth-email" class="text-input" type="email" autocomplete="username" required><label class="field-label" for="auth-password">密碼</label><input id="auth-password" class="text-input" type="password" autocomplete="current-password" required><div id="auth-error" class="variance bad" hidden></div><button class="primary-btn" type="submit">登入共用資料</button><button id="demo-mode" class="secondary-btn full" type="button">先使用本機示範</button></form></div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="./config.js?v=3"></script>
-  <script src="./cloud.js?v=3"></script>
-  <script src="./app.js?v=3"></script>
+  <script src="./config.js?v=4"></script>
+  <script src="./cloud.js?v=4"></script>
+  <script src="./app.js?v=4"></script>
 </body>
 </html>
