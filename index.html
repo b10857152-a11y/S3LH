@@ -28,7 +28,7 @@
     <main>
       <header class="topbar">
         <div><p class="eyebrow">盤點批次</p><h1 id="page-title">現場盤點</h1></div>
-        <div class="sync-pill"><span></span><span id="sync-text">本機資料已就緒</span></div>
+        <button id="account-button" class="sync-pill"><span></span><span id="sync-text">正在連線</span></button>
       </header>
 
       <section id="view-count" class="view active">
@@ -84,8 +84,12 @@
   </div>
 
   <div id="location-dialog" class="dialog-backdrop" hidden><div class="dialog"><div class="dialog-head"><h2>選擇目前儲位</h2><button id="close-location" aria-label="關閉">×</button></div><div id="location-list" class="location-list"></div></div></div>
+  <div id="auth-dialog" class="dialog-backdrop" hidden><form id="auth-form" class="dialog auth-dialog"><div class="dialog-head"><div><p class="step">雲端資料</p><h2>登入構件盤點</h2></div></div><p>登入後，電腦與手機會使用同一批盤點資料。</p><label class="field-label" for="auth-email">Email</label><input id="auth-email" class="text-input" type="email" autocomplete="username" required><label class="field-label" for="auth-password">密碼</label><input id="auth-password" class="text-input" type="password" autocomplete="current-password" required><div id="auth-error" class="variance bad" hidden></div><button class="primary-btn" type="submit">登入共用資料</button><button id="demo-mode" class="secondary-btn full" type="button">先使用本機示範</button></form></div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./config.js"></script>
+  <script src="./cloud.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>
