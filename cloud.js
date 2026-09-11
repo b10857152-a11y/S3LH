@@ -71,12 +71,7 @@
     const targets=await selectAll(()=>c.from('inventory_targets').select('id,order_part_id,book_qty_snapshot,workflow_status').eq('session_id',current.id).order('id'));
     const byOrderPart=new Map(orderParts.map(op=>[op.id,op]));
     const parts=targets.map(t=>{const op=byOrderPart.get(t.order_part_id);return {id:t.id,targetId:t.id,orderPartId:t.order_part_id,partDbId:op?.parts?.id,order:op?.orders?.order_no||'待確認',no:op?.parts?.part_no||'未知',name:op?.parts?.name||'未知構件',drawingNo:op?.parts?.drawing_no||'',book:t.book_qty_snapshot,workflow:t.workflow_status,isActive:op?.is_active!==false};});
-    const targetIds=parts.map(p=>p.targetId);
-    let countRows=[];
-    for(const ids of splitInto(targetIds,100)){
-      const rows=await selectAll(()=>c.from('count_entries').select('id,target_id,location_id,actual_qty,version_check_status,verified_at,note,recorded_at,is_void').in('target_id',ids).eq('is_void',false).order('id'));
-      countRows.push(...rows);
-    }
+    const countRows=await selectAll(()=>c.from('count_entries').select('id,target_id,location_id,actual_qty,version_check_status,verified_at,note,recorded_at,is_void,inventory_targets!inner(session_id)').eq('inventory_targets.session_id',current.id).eq('is_void',false).order('id'));
     const locationByDb=new Map((locRes.data||[]).map(l=>[l.id,l.code]));
     return {locations,parts,catalog,counts:countRows.map(r=>({id:r.id,partId:r.target_id,location:locationByDb.get(r.location_id)||'未知',locationDbId:r.location_id,qty:r.actual_qty,verified:r.version_check_status!=='UNCHECKED',note:r.note||'',at:r.recorded_at}))};
   }
