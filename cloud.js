@@ -35,10 +35,11 @@
     return saved;
   }
   function expectedLocations(){
-    return ['A','B','C','D'].flatMap(rack=>Array.from({length:4},(_,levelIndex)=>Array.from({length:6},(_,binIndex)=>{
+    const regular=['A','B','C','D'].flatMap(rack=>Array.from({length:4},(_,levelIndex)=>Array.from({length:6},(_,binIndex)=>{
       const level=String(levelIndex+1),bin=String(binIndex+1);
       return {code:`${rack}-${level.padStart(2,'0')}-${bin.padStart(2,'0')}`,name:`${rack}架・${level}層・${bin}格`,rack_code:rack,level_code:level,bin_code:bin,is_active:true};
     })).flat());
+    return [...regular,{code:'SCRAP',name:'報廢區',rack_code:'報廢',level_code:'NA',bin_code:'NA',is_active:true}];
   }
   async function loadLocations(){
     const c=getClient();
@@ -127,6 +128,21 @@
     if(audit.error)throw audit.error;
     return updated.data;
   }
+  async function voidCountEntry(id,reason){
+    const c=getClient();
+    const before=await c.from('count_entries').select('id,target_id,location_id,actual_qty,version_check_status,verified_at,note,recorded_at,updated_at,is_void').eq('id',id).eq('is_void',false).single();
+    if(before.error)throw before.error;
+    const payload={is_void:true,updated_at:new Date().toISOString()};
+    const removed=await c.from('count_entries').update(payload).eq('id',id).select('id').single();
+    if(removed.error)throw removed.error;
+    const remaining=await c.from('count_entries').select('id',{count:'exact',head:true}).eq('target_id',before.data.target_id).eq('is_void',false);
+    if(remaining.error)throw remaining.error;
+    const target=await c.from('inventory_targets').update({workflow_status:remaining.count?'IN_PROGRESS':'NOT_STARTED'}).eq('id',before.data.target_id);
+    if(target.error)throw target.error;
+    const audit=await c.from('audit_logs').insert({entity_type:'count_entry',entity_id:id,action:'VOID',before_data:before.data,after_data:payload,reason:reason||'刪除錯誤盤點紀錄'});
+    if(audit.error)throw audit.error;
+    return removed.data;
+  }
   async function batchUpdateCountEntries(entryIds,{locationDbId,verificationAction,verifiedAt,reason},onProgress){
     const c=getClient();
     if(!entryIds.length)return 0;
@@ -156,6 +172,38 @@
     }
     const updatedById=new Map(updatedRows.map(row=>[row.id,row]));
     const auditRows=beforeRows.map(before=>({entity_type:'count_entry',entity_id:before.id,action:'BATCH_ADMIN_UPDATE',before_data:before,after_data:updatedById.get(before.id),reason:reason||'管理者批次修正盤點資料'}));
+    for(const batch of splitInto(auditRows,100)){const audit=await c.from('audit_logs').insert(batch);if(audit.error)throw audit.error;}
+    return updatedRows.length;
+  }
+  async function batchMoveOrderParts(orderPartIds,newOrderNo,reason,onProgress){
+    const c=getClient();
+    if(!orderPartIds.length)return 0;
+    const targetOrder=await c.from('orders').upsert({order_no:newOrderNo},{onConflict:'order_no'}).select('id,order_no').single();
+    if(targetOrder.error)throw targetOrder.error;
+    const beforeRows=[];
+    for(const ids of splitInto(orderPartIds,25)){
+      const result=await c.from('order_parts').select('id,order_id,part_id,book_qty,is_active').in('id',ids);
+      if(result.error)throw result.error;
+      beforeRows.push(...(result.data||[]));
+    }
+    if(new Set(beforeRows.map(row=>row.part_id)).size!==beforeRows.length)throw new Error('選取項目包含相同構件，移到同一訂單會重複，請分開處理');
+    const selectedIds=new Set(beforeRows.map(row=>row.id));
+    for(const partIds of splitInto(beforeRows.map(row=>row.part_id),25)){
+      const existing=await c.from('order_parts').select('id,part_id').eq('order_id',targetOrder.data.id).in('part_id',partIds);
+      if(existing.error)throw existing.error;
+      if((existing.data||[]).some(row=>!selectedIds.has(row.id)))throw new Error('目標訂單已有相同構件，請先取消該筆選取');
+    }
+    const updatedRows=[];
+    let done=0;
+    for(const batch of splitInto(beforeRows,25)){
+      const result=await c.from('order_parts').update({order_id:targetOrder.data.id}).in('id',batch.map(row=>row.id)).select('id,order_id,part_id,book_qty,is_active');
+      if(result.error)throw result.error;
+      updatedRows.push(...(result.data||[]));
+      done+=batch.length;
+      if(typeof onProgress==='function')onProgress(done,beforeRows.length);
+    }
+    const updatedById=new Map(updatedRows.map(row=>[row.id,row]));
+    const auditRows=beforeRows.map(before=>({entity_type:'order_part',entity_id:before.id,action:'BATCH_ORDER_MOVE',before_data:before,after_data:updatedById.get(before.id),reason:reason||`批次移至訂單 ${newOrderNo}`}));
     for(const batch of splitInto(auditRows,100)){const audit=await c.from('audit_logs').insert(batch);if(audit.error)throw audit.error;}
     return updatedRows.length;
   }
@@ -206,5 +254,5 @@
     await c.from('audit_logs').insert({entity_type:'order_part',entity_id:id,action:isActive?'RESTORE':'DISABLE',before_data:before.data,after_data:updated.data,reason});
     return updated.data;
   }
-  window.cloud={configured:Boolean(cfg.supabaseUrl&&cfg.supabasePublishableKey),session,signIn,signOut,loadState,saveCount,updateCountEntry,batchUpdateCountEntries,importItems,addOrderPart,updateOrderPart,setOrderPartActive};
+  window.cloud={configured:Boolean(cfg.supabaseUrl&&cfg.supabasePublishableKey),session,signIn,signOut,loadState,saveCount,updateCountEntry,voidCountEntry,batchUpdateCountEntries,batchMoveOrderParts,importItems,addOrderPart,updateOrderPart,setOrderPartActive};
 })();
