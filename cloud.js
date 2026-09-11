@@ -8,6 +8,32 @@
     client=window.supabase.createClient(cfg.supabaseUrl,cfg.supabasePublishableKey,{auth:{persistSession:true,autoRefreshToken:true}});
     return client;
   }
+  const splitInto=(rows,size)=>Array.from({length:Math.ceil(rows.length/size)},(_,index)=>rows.slice(index*size,(index+1)*size));
+  async function selectAll(makeQuery,pageSize=500){
+    const all=[];
+    for(let from=0;;from+=pageSize){
+      const result=await makeQuery().range(from,from+pageSize-1);
+      if(result.error)throw result.error;
+      const rows=result.data||[];
+      all.push(...rows);
+      if(rows.length<pageSize)break;
+    }
+    return all;
+  }
+  async function upsertInBatches(table,rows,options,selectColumns,onBatch,batchSize=300){
+    const saved=[];
+    let done=0;
+    for(const batch of splitInto(rows,batchSize)){
+      let query=getClient().from(table).upsert(batch,options);
+      if(selectColumns)query=query.select(selectColumns);
+      const result=await query;
+      if(result.error)throw result.error;
+      if(result.data)saved.push(...result.data);
+      done+=batch.length;
+      if(onBatch)onBatch(done,rows.length);
+    }
+    return saved;
+  }
   async function session(){const c=getClient();if(!c)return null;const {data}=await c.auth.getSession();return data.session;}
   async function signIn(email,password){const c=getClient();if(!c)throw new Error('雲端設定尚未完成');const {data,error}=await c.auth.signInWithPassword({email,password});if(error)throw error;return data.user;}
   async function signOut(){const c=getClient();if(c)await c.auth.signOut();}
@@ -22,32 +48,35 @@
       current=created.data;
     }
     if(current&&orderParts.length){
-      const rows=orderParts.map(op=>({session_id:current.id,order_part_id:op.id,book_qty_snapshot:op.book_qty,workflow_status:'NOT_STARTED'}));
-      const inserted=await c.from('inventory_targets').upsert(rows,{onConflict:'session_id,order_part_id',ignoreDuplicates:true});
-      if(inserted.error)throw inserted.error;
+      const existing=await selectAll(()=>c.from('inventory_targets').select('id,order_part_id').eq('session_id',current.id).order('id'));
+      const existingIds=new Set(existing.map(row=>row.order_part_id));
+      const rows=orderParts.filter(op=>!existingIds.has(op.id)).map(op=>({session_id:current.id,order_part_id:op.id,book_qty_snapshot:op.book_qty,workflow_status:'NOT_STARTED'}));
+      await upsertInBatches('inventory_targets',rows,{onConflict:'session_id,order_part_id',ignoreDuplicates:true});
     }
     activeSessionId=current?.id||null;
     return current;
   }
   async function loadState(){
     const c=getClient();if(!c)throw new Error('雲端設定尚未完成');
-    const [locRes,opRes]=await Promise.all([
+    const [locRes,orderParts]=await Promise.all([
       c.from('locations').select('*').eq('is_active',true).order('code'),
-      c.from('order_parts').select('*,orders!inner(order_no),parts!inner(id,part_no,name,drawing_no)')
+      selectAll(()=>c.from('order_parts').select('*,orders!inner(order_no),parts!inner(id,part_no,name,drawing_no)').order('id'))
     ]);
-    if(locRes.error)throw locRes.error;if(opRes.error)throw opRes.error;
-    const activeOrderParts=(opRes.data||[]).filter(op=>op.is_active!==false);
+    if(locRes.error)throw locRes.error;
+    const activeOrderParts=orderParts.filter(op=>op.is_active!==false);
     const current=await ensureActiveSession(activeOrderParts);
     const locations=(locRes.data||[]).map(l=>({id:l.code,dbId:l.id,name:l.name,rack:l.rack_code,level:l.level_code,bin:l.bin_code}));
-    const catalog=(opRes.data||[]).map(op=>({orderPartId:op.id,partDbId:op.parts?.id,order:op.orders?.order_no||'待確認',no:op.parts?.part_no||'未知',name:op.parts?.name||'未知構件',drawingNo:op.parts?.drawing_no||'',book:op.book_qty,isActive:op.is_active!==false}));
+    const catalog=orderParts.map(op=>({orderPartId:op.id,partDbId:op.parts?.id,order:op.orders?.order_no||'待確認',no:op.parts?.part_no||'未知',name:op.parts?.name||'未知構件',drawingNo:op.parts?.drawing_no||'',book:op.book_qty,isActive:op.is_active!==false}));
     if(!current)return {locations,parts:[],counts:[],catalog};
-    const targetRes=await c.from('inventory_targets').select('id,order_part_id,book_qty_snapshot,workflow_status').eq('session_id',current.id);
-    if(targetRes.error)throw targetRes.error;
-    const byOrderPart=new Map((opRes.data||[]).map(op=>[op.id,op]));
-    const parts=(targetRes.data||[]).map(t=>{const op=byOrderPart.get(t.order_part_id);return {id:t.id,targetId:t.id,orderPartId:t.order_part_id,partDbId:op?.parts?.id,order:op?.orders?.order_no||'待確認',no:op?.parts?.part_no||'未知',name:op?.parts?.name||'未知構件',drawingNo:op?.parts?.drawing_no||'',book:t.book_qty_snapshot,workflow:t.workflow_status,isActive:op?.is_active!==false};});
+    const targets=await selectAll(()=>c.from('inventory_targets').select('id,order_part_id,book_qty_snapshot,workflow_status').eq('session_id',current.id).order('id'));
+    const byOrderPart=new Map(orderParts.map(op=>[op.id,op]));
+    const parts=targets.map(t=>{const op=byOrderPart.get(t.order_part_id);return {id:t.id,targetId:t.id,orderPartId:t.order_part_id,partDbId:op?.parts?.id,order:op?.orders?.order_no||'待確認',no:op?.parts?.part_no||'未知',name:op?.parts?.name||'未知構件',drawingNo:op?.parts?.drawing_no||'',book:t.book_qty_snapshot,workflow:t.workflow_status,isActive:op?.is_active!==false};});
     const targetIds=parts.map(p=>p.targetId);
     let countRows=[];
-    if(targetIds.length){const result=await c.from('count_entries').select('id,target_id,location_id,actual_qty,version_check_status,verified_at,note,recorded_at,is_void').in('target_id',targetIds).eq('is_void',false);if(result.error)throw result.error;countRows=result.data||[];}
+    for(const ids of splitInto(targetIds,100)){
+      const rows=await selectAll(()=>c.from('count_entries').select('id,target_id,location_id,actual_qty,version_check_status,verified_at,note,recorded_at,is_void').in('target_id',ids).eq('is_void',false).order('id'));
+      countRows.push(...rows);
+    }
     const locationByDb=new Map((locRes.data||[]).map(l=>[l.id,l.code]));
     return {locations,parts,catalog,counts:countRows.map(r=>({id:r.id,partId:r.target_id,location:locationByDb.get(r.location_id)||'未知',locationDbId:r.location_id,qty:r.actual_qty,verified:r.version_check_status!=='UNCHECKED',note:r.note||'',at:r.recorded_at}))};
   }
@@ -68,21 +97,25 @@
     await c.from('inventory_targets').update({workflow_status:'IN_PROGRESS'}).eq('id',part.targetId);
     return result.data;
   }
-  async function importItems(items){
+  async function importItems(items,onProgress){
     const c=getClient();
+    if(!items?.length)return 0;
+    const progress=(stage,done,total)=>{if(typeof onProgress==='function')onProgress({stage,done,total});};
     const orderPayload=[...new Map(items.map(i=>[i.order,{order_no:i.order}])).values()];
     const partPayload=[...new Map(items.map(i=>[i.no,{part_no:i.no,name:i.name}])).values()];
-    const [or,pr]=await Promise.all([
-      c.from('orders').upsert(orderPayload,{onConflict:'order_no'}).select('id,order_no'),
-      c.from('parts').upsert(partPayload,{onConflict:'part_no'}).select('id,part_no')
-    ]);
-    if(or.error)throw or.error;if(pr.error)throw pr.error;
-    const orderIds=new Map(or.data.map(x=>[x.order_no,x.id])),partIds=new Map(pr.data.map(x=>[x.part_no,x.id]));
+    progress('準備訂單',0,orderPayload.length);
+    const orders=await upsertInBatches('orders',orderPayload,{onConflict:'order_no'},'id,order_no',(done,total)=>progress('匯入訂單',done,total));
+    progress('準備構件',0,partPayload.length);
+    const parts=await upsertInBatches('parts',partPayload,{onConflict:'part_no'},'id,part_no',(done,total)=>progress('匯入構件',done,total));
+    const orderIds=new Map(orders.map(x=>[x.order_no,x.id])),partIds=new Map(parts.map(x=>[x.part_no,x.id]));
     const rows=items.map(i=>({order_id:orderIds.get(i.order),part_id:partIds.get(i.no),ordered_qty:i.orderedValues?.length?Math.max(...i.orderedValues):null,book_qty:i.book,is_active:true}));
-    const saved=await c.from('order_parts').upsert(rows,{onConflict:'order_id,part_id'}).select('id,book_qty');
-    if(saved.error)throw saved.error;
-    await ensureActiveSession(saved.data||[]);
-    return saved.data.length;
+    if(rows.some(row=>!row.order_id||!row.part_id))throw new Error('部分訂單或構件未取得雲端編號，請重新匯入');
+    progress('準備帳面資料',0,rows.length);
+    const saved=await upsertInBatches('order_parts',rows,{onConflict:'order_id,part_id'},'id,book_qty',(done,total)=>progress('匯入帳面資料',done,total));
+    progress('建立盤點清單',0,saved.length);
+    await ensureActiveSession(saved);
+    progress('完成',saved.length,saved.length);
+    return saved.length;
   }
   async function addOrderPart(item){
     const c=getClient();
