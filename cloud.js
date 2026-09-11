@@ -90,15 +90,15 @@
     const targets=await selectAll(()=>c.from('inventory_targets').select('id,order_part_id,book_qty_snapshot,workflow_status').eq('session_id',current.id).order('id'));
     const byOrderPart=new Map(orderParts.map(op=>[op.id,op]));
     const parts=targets.map(t=>{const op=byOrderPart.get(t.order_part_id);return {id:t.id,targetId:t.id,orderPartId:t.order_part_id,partDbId:op?.parts?.id,order:op?.orders?.order_no||'待確認',no:op?.parts?.part_no||'未知',name:op?.parts?.name||'未知構件',drawingNo:op?.parts?.drawing_no||'',book:t.book_qty_snapshot,workflow:t.workflow_status,isActive:op?.is_active!==false};});
-    const countRows=await selectAll(()=>c.from('count_entries').select('id,target_id,location_id,actual_qty,version_check_status,verified_at,note,recorded_at,is_void,inventory_targets!inner(session_id)').eq('inventory_targets.session_id',current.id).eq('is_void',false).order('id'));
+    const countRows=await selectAll(()=>c.from('count_entries').select('id,target_id,location_id,actual_qty,version_check_status,verified_at,note,recorded_at,updated_at,is_void,inventory_targets!inner(session_id)').eq('inventory_targets.session_id',current.id).eq('is_void',false).order('id'));
     const locationByDb=new Map(locationRows.map(l=>[l.id,l.code]));
-    return {locations,parts,catalog,counts:countRows.map(r=>({id:r.id,partId:r.target_id,location:locationByDb.get(r.location_id)||'未知',locationDbId:r.location_id,qty:r.actual_qty,verified:r.version_check_status!=='UNCHECKED',note:r.note||'',at:r.recorded_at}))};
+    return {locations,parts,catalog,counts:countRows.map(r=>({id:r.id,partId:r.target_id,location:locationByDb.get(r.location_id)||'未知',locationDbId:r.location_id,qty:r.actual_qty,verified:r.version_check_status!=='UNCHECKED',verifiedAt:r.verified_at,note:r.note||'',at:r.recorded_at,updatedAt:r.updated_at}))};
   }
-  async function saveCount({part,location,qty,verified,note}){
+  async function saveCount({part,location,qty,verified,note,verifiedAt}){
     const c=getClient();
     const existing=await c.from('count_entries').select('id,actual_qty,version_check_status,note').eq('target_id',part.targetId).eq('location_id',location.dbId).eq('is_void',false).maybeSingle();
     if(existing.error)throw existing.error;
-    const payload={actual_qty:qty,version_check_status:verified?'BASELINE_CREATED':'UNCHECKED',verified_at:verified?new Date().toISOString():null,note:note||null,updated_at:new Date().toISOString()};
+    const payload={actual_qty:qty,version_check_status:verified?'BASELINE_CREATED':'UNCHECKED',verified_at:verified?(verifiedAt||new Date().toISOString()):null,note:note||null,updated_at:new Date().toISOString()};
     let result;
     if(existing.data){
       result=await c.from('count_entries').update(payload).eq('id',existing.data.id).select().single();
@@ -110,6 +110,54 @@
     if(result.error)throw result.error;
     await c.from('inventory_targets').update({workflow_status:'IN_PROGRESS'}).eq('id',part.targetId);
     return result.data;
+  }
+  async function updateCountEntry(id,{locationDbId,qty,verified,verifiedAt,note,reason}){
+    const c=getClient();
+    const before=await c.from('count_entries').select('id,target_id,location_id,actual_qty,version_check_status,verified_at,note,recorded_at,updated_at').eq('id',id).eq('is_void',false).single();
+    if(before.error)throw before.error;
+    if(locationDbId!==before.data.location_id){
+      const conflict=await c.from('count_entries').select('id').eq('target_id',before.data.target_id).eq('location_id',locationDbId).eq('is_void',false).neq('id',id).maybeSingle();
+      if(conflict.error)throw conflict.error;
+      if(conflict.data)throw new Error('此構件在目標儲位已有紀錄，請逐筆確認後再調整');
+    }
+    const payload={location_id:locationDbId,actual_qty:qty,version_check_status:verified?'BASELINE_CREATED':'UNCHECKED',verified_at:verified?verifiedAt:null,note:note||null,updated_at:new Date().toISOString()};
+    const updated=await c.from('count_entries').update(payload).eq('id',id).select().single();
+    if(updated.error)throw updated.error;
+    const audit=await c.from('audit_logs').insert({entity_type:'count_entry',entity_id:id,action:'ADMIN_UPDATE',before_data:before.data,after_data:payload,reason:reason||'管理者修正盤點資料'});
+    if(audit.error)throw audit.error;
+    return updated.data;
+  }
+  async function batchUpdateCountEntries(entryIds,{locationDbId,verificationAction,verifiedAt,reason},onProgress){
+    const c=getClient();
+    if(!entryIds.length)return 0;
+    const beforeRows=[];
+    for(const ids of splitInto(entryIds,25)){
+      const result=await c.from('count_entries').select('id,target_id,location_id,actual_qty,version_check_status,verified_at,note,recorded_at,updated_at').in('id',ids).eq('is_void',false);
+      if(result.error)throw result.error;
+      beforeRows.push(...(result.data||[]));
+    }
+    let done=0;
+    const updatedRows=[];
+    for(const batch of splitInto(beforeRows,25)){
+      const payload={updated_at:new Date().toISOString()};
+      if(locationDbId)payload.location_id=locationDbId;
+      if(verificationAction==='confirm'){
+        payload.version_check_status='BASELINE_CREATED';
+        payload.verified_at=verifiedAt;
+      }else if(verificationAction==='clear'){
+        payload.version_check_status='UNCHECKED';
+        payload.verified_at=null;
+      }
+      const result=await c.from('count_entries').update(payload).in('id',batch.map(row=>row.id)).select('id,target_id,location_id,actual_qty,version_check_status,verified_at,note,recorded_at,updated_at');
+      if(result.error)throw result.error;
+      updatedRows.push(...(result.data||[]));
+      done+=batch.length;
+      if(typeof onProgress==='function')onProgress(done,beforeRows.length);
+    }
+    const updatedById=new Map(updatedRows.map(row=>[row.id,row]));
+    const auditRows=beforeRows.map(before=>({entity_type:'count_entry',entity_id:before.id,action:'BATCH_ADMIN_UPDATE',before_data:before,after_data:updatedById.get(before.id),reason:reason||'管理者批次修正盤點資料'}));
+    for(const batch of splitInto(auditRows,100)){const audit=await c.from('audit_logs').insert(batch);if(audit.error)throw audit.error;}
+    return updatedRows.length;
   }
   async function importItems(items,onProgress){
     const c=getClient();
@@ -137,8 +185,9 @@
     const part=await c.from('parts').upsert({part_no:item.no,name:item.name,drawing_no:item.drawingNo||null},{onConflict:'part_no'}).select('id').single();if(part.error)throw part.error;
     const saved=await c.from('order_parts').upsert({order_id:order.data.id,part_id:part.data.id,book_qty:item.book,is_active:true},{onConflict:'order_id,part_id'}).select('id,book_qty').single();if(saved.error)throw saved.error;
     await ensureActiveSession([saved.data]);
+    const target=await c.from('inventory_targets').select('id').eq('session_id',activeSessionId).eq('order_part_id',saved.data.id).single();if(target.error)throw target.error;
     await c.from('audit_logs').insert({entity_type:'order_part',entity_id:saved.data.id,action:'CREATE',after_data:item,reason:item.reason||'手動新增'});
-    return saved.data;
+    return {...saved.data,targetId:target.data.id};
   }
   async function updateOrderPart(id,item){
     const c=getClient();
@@ -157,5 +206,5 @@
     await c.from('audit_logs').insert({entity_type:'order_part',entity_id:id,action:isActive?'RESTORE':'DISABLE',before_data:before.data,after_data:updated.data,reason});
     return updated.data;
   }
-  window.cloud={configured:Boolean(cfg.supabaseUrl&&cfg.supabasePublishableKey),session,signIn,signOut,loadState,saveCount,importItems,addOrderPart,updateOrderPart,setOrderPartActive};
+  window.cloud={configured:Boolean(cfg.supabaseUrl&&cfg.supabasePublishableKey),session,signIn,signOut,loadState,saveCount,updateCountEntry,batchUpdateCountEntries,importItems,addOrderPart,updateOrderPart,setOrderPartActive};
 })();
