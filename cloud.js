@@ -34,6 +34,26 @@
     }
     return saved;
   }
+  function expectedLocations(){
+    return ['A','B','C','D'].flatMap(rack=>Array.from({length:4},(_,levelIndex)=>Array.from({length:6},(_,binIndex)=>{
+      const level=String(levelIndex+1),bin=String(binIndex+1);
+      return {code:`${rack}-${level.padStart(2,'0')}-${bin.padStart(2,'0')}`,name:`${rack}架・${level}層・${bin}格`,rack_code:rack,level_code:level,bin_code:bin,is_active:true};
+    })).flat());
+  }
+  async function loadLocations(){
+    const c=getClient();
+    let rows=await selectAll(()=>c.from('locations').select('*').order('code'));
+    const byCode=new Map(rows.map(row=>[row.code,row]));
+    const missingOrOutdated=expectedLocations().filter(expected=>{
+      const current=byCode.get(expected.code);
+      return !current||current.is_active!==true||current.name!==expected.name||current.rack_code!==expected.rack_code||current.level_code!==expected.level_code||current.bin_code!==expected.bin_code;
+    });
+    if(missingOrOutdated.length){
+      await upsertInBatches('locations',missingOrOutdated,{onConflict:'code'});
+      rows=await selectAll(()=>c.from('locations').select('*').eq('is_active',true).order('code'));
+    }else rows=rows.filter(row=>row.is_active===true);
+    return rows;
+  }
   async function session(){const c=getClient();if(!c)return null;const {data}=await c.auth.getSession();return data.session;}
   async function signIn(email,password){const c=getClient();if(!c)throw new Error('雲端設定尚未完成');const {data,error}=await c.auth.signInWithPassword({email,password});if(error)throw error;return data.user;}
   async function signOut(){const c=getClient();if(c)await c.auth.signOut();}
@@ -58,21 +78,20 @@
   }
   async function loadState(){
     const c=getClient();if(!c)throw new Error('雲端設定尚未完成');
-    const [locRes,orderParts]=await Promise.all([
-      c.from('locations').select('*').eq('is_active',true).order('code'),
+    const [locationRows,orderParts]=await Promise.all([
+      loadLocations(),
       selectAll(()=>c.from('order_parts').select('*,orders!inner(order_no),parts!inner(id,part_no,name,drawing_no)').order('id'))
     ]);
-    if(locRes.error)throw locRes.error;
     const activeOrderParts=orderParts.filter(op=>op.is_active!==false);
     const current=await ensureActiveSession(activeOrderParts);
-    const locations=(locRes.data||[]).map(l=>({id:l.code,dbId:l.id,name:l.name,rack:l.rack_code,level:l.level_code,bin:l.bin_code}));
+    const locations=locationRows.map(l=>({id:l.code,dbId:l.id,name:l.name,rack:l.rack_code,level:l.level_code,bin:l.bin_code}));
     const catalog=orderParts.map(op=>({orderPartId:op.id,partDbId:op.parts?.id,order:op.orders?.order_no||'待確認',no:op.parts?.part_no||'未知',name:op.parts?.name||'未知構件',drawingNo:op.parts?.drawing_no||'',book:op.book_qty,isActive:op.is_active!==false}));
     if(!current)return {locations,parts:[],counts:[],catalog};
     const targets=await selectAll(()=>c.from('inventory_targets').select('id,order_part_id,book_qty_snapshot,workflow_status').eq('session_id',current.id).order('id'));
     const byOrderPart=new Map(orderParts.map(op=>[op.id,op]));
     const parts=targets.map(t=>{const op=byOrderPart.get(t.order_part_id);return {id:t.id,targetId:t.id,orderPartId:t.order_part_id,partDbId:op?.parts?.id,order:op?.orders?.order_no||'待確認',no:op?.parts?.part_no||'未知',name:op?.parts?.name||'未知構件',drawingNo:op?.parts?.drawing_no||'',book:t.book_qty_snapshot,workflow:t.workflow_status,isActive:op?.is_active!==false};});
     const countRows=await selectAll(()=>c.from('count_entries').select('id,target_id,location_id,actual_qty,version_check_status,verified_at,note,recorded_at,is_void,inventory_targets!inner(session_id)').eq('inventory_targets.session_id',current.id).eq('is_void',false).order('id'));
-    const locationByDb=new Map((locRes.data||[]).map(l=>[l.id,l.code]));
+    const locationByDb=new Map(locationRows.map(l=>[l.id,l.code]));
     return {locations,parts,catalog,counts:countRows.map(r=>({id:r.id,partId:r.target_id,location:locationByDb.get(r.location_id)||'未知',locationDbId:r.location_id,qty:r.actual_qty,verified:r.version_check_status!=='UNCHECKED',note:r.note||'',at:r.recorded_at}))};
   }
   async function saveCount({part,location,qty,verified,note}){
